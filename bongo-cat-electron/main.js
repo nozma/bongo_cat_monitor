@@ -85,6 +85,14 @@ function createWindow() {
       mainWindow.hide();
     }
   });
+
+  if (process.platform === 'darwin' && app.dock) {
+    // Hide the Dock icon while keeping the menu bar available
+    app.dock.hide();
+    mainWindow.on('show', () => {
+      app.dock.hide();
+    });
+  }
 }
 
 function createTray() {
