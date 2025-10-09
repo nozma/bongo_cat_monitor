@@ -14,6 +14,7 @@ struct BongoCatSettings {
     bool show_cpu = true;
     bool show_ram = true;
     bool show_wpm = true;
+    bool show_count = true;
     bool show_time = true;
     bool time_format_24h = true;
     int sleep_timeout_minutes = 5;
@@ -58,12 +59,14 @@ lv_obj_t * screen = NULL;
 lv_obj_t * cpu_label = NULL;
 lv_obj_t * ram_label = NULL;
 lv_obj_t * wpm_label = NULL;
+lv_obj_t * count_label = NULL;
 lv_obj_t * time_label = NULL;
 
 // Stats data
 int cpu_usage = 0;
 int ram_usage = 0;
 int wpm_speed = 0;
+uint32_t typing_count = 0;
 String current_time_str = "00:00";
 bool time_initialized = false;  // Track if we've received time from Python
 
@@ -81,10 +84,11 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
 }
 
 // Update system stats display
-void updateSystemStats(int cpu, int ram, int wpm) {
+void updateSystemStats(int cpu, int ram, int wpm, uint32_t count) {
     cpu_usage = cpu;
     ram_usage = ram;
     wpm_speed = wpm;
+    typing_count = count;
     
     if (cpu_label) {
         lv_label_set_text_fmt(cpu_label, "CPU: %d%%", cpu);
@@ -94,6 +98,9 @@ void updateSystemStats(int cpu, int ram, int wpm) {
     }
     if (wpm_label) {
         lv_label_set_text_fmt(wpm_label, "WPM: %d", wpm);
+    }
+    if (count_label) {
+        lv_label_set_text_fmt(count_label, "Count: %lu", (unsigned long)count);
     }
 }
 
@@ -174,6 +181,7 @@ void resetSettings() {
     settings.show_cpu = true;
     settings.show_ram = true;
     settings.show_wpm = true;
+    settings.show_count = true;
     settings.show_time = true;
     settings.time_format_24h = true;
     settings.sleep_timeout_minutes = 5;
@@ -211,6 +219,15 @@ void updateDisplayVisibility() {
             lv_obj_add_flag(wpm_label, LV_OBJ_FLAG_HIDDEN);
         }
         Serial.println("⌨️ WPM visibility updated: " + String(settings.show_wpm ? "ON" : "OFF"));
+    }
+    
+    if (count_label) {
+        if (settings.show_count && settings.show_wpm) {
+            lv_obj_clear_flag(count_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(count_label, LV_OBJ_FLAG_HIDDEN);
+        }
+        Serial.println("🔢 Count visibility updated: " + String((settings.show_count && settings.show_wpm) ? "ON" : "OFF"));
     }
     
     if (time_label) {
@@ -304,7 +321,7 @@ void handleSerialCommands() {
             sprite_manager.is_streak_mode = false;
             Serial.println("😐 Streak mode disabled - normal face");
         } else if (command.startsWith("STATS:")) {
-            // Parse stats: STATS:CPU:45,RAM:67,WPM:23
+            // Parse stats: STATS:CPU:45,RAM:67,WPM:23,COUNT:150
             String stats = command.substring(6);
             
             int cpuStart = stats.indexOf("CPU:") + 4;
@@ -316,9 +333,26 @@ void handleSerialCommands() {
             int ram = stats.substring(ramStart, ramEnd).toInt();
             
             int wpmStart = stats.indexOf("WPM:") + 4;
-            int wpm = stats.substring(wpmStart).toInt();
+            int wpmEnd = stats.indexOf(",", wpmStart);
+            int wpm = 0;
+            uint32_t count = typing_count;
+            if (wpmEnd == -1) {
+                wpm = stats.substring(wpmStart).toInt();
+            } else {
+                wpm = stats.substring(wpmStart, wpmEnd).toInt();
+                int countStart = stats.indexOf("COUNT:", wpmEnd);
+                if (countStart != -1) {
+                    count = stats.substring(countStart + 6).toInt();
+                }
+            }
             
-            updateSystemStats(cpu, ram, wpm);
+            // Handle case where COUNT appears but no trailing comma
+            if (stats.indexOf("COUNT:") != -1 && wpmEnd == -1) {
+                int countStart = stats.indexOf("COUNT:") + 6;
+                count = stats.substring(countStart).toInt();
+            }
+            
+            updateSystemStats(cpu, ram, wpm, count);
             
         } else if (command.startsWith("TIME:")) {
             // Handle time updates from Python script
@@ -338,6 +372,13 @@ void handleSerialCommands() {
         } else if (command.startsWith("WPM:")) {
             // Handle WPM display updates
             wpm_speed = command.substring(4).toInt();
+            updateSystemStats(cpu_usage, ram_usage, wpm_speed, typing_count);
+            
+        } else if (command.startsWith("COUNT:")) {
+            typing_count = command.substring(6).toInt();
+            if (count_label) {
+                lv_label_set_text_fmt(count_label, "Count: %lu", (unsigned long)typing_count);
+            }
             
         } else if (command == "PING") {
             Serial.println("PONG");
@@ -378,6 +419,12 @@ void handleSerialCommands() {
             settings.show_wpm = (value == "ON");
             updateDisplayVisibility();
             Serial.println("⌨️ WPM display: " + value);
+            
+        } else if (command.startsWith("DISPLAY_COUNT:")) {
+            String value = command.substring(14);
+            settings.show_count = (value == "ON");
+            updateDisplayVisibility();
+            Serial.println("🔢 Count display: " + value);
             
         } else if (command.startsWith("DISPLAY_TIME:")) {
             String value = command.substring(13);
@@ -865,6 +912,12 @@ void createBongoCat() {
     lv_obj_set_style_text_font(wpm_label, &lv_font_unscii_16, 0);
     lv_obj_set_style_text_color(wpm_label, lv_color_black(), 0);
     lv_obj_align(wpm_label, LV_ALIGN_TOP_LEFT, 5, 45);
+    
+    count_label = lv_label_create(screen);
+    lv_label_set_text(count_label, "Count: 0");
+    lv_obj_set_style_text_font(count_label, &lv_font_unscii_16, 0);
+    lv_obj_set_style_text_color(count_label, lv_color_black(), 0);
+    lv_obj_align(count_label, LV_ALIGN_TOP_LEFT, 5, 65);
     
     // Create time label (top right) - bigger pixelated font
     time_label = lv_label_create(screen);

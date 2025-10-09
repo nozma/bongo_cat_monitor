@@ -7,11 +7,11 @@
       "chipFamily": "ESP32",
       "parts": [
         {
-          "path": "build/esp32.esp32.esp32/bongo_cat.ino.bootloader.bin",
+          "path": "build/esp32.esp32.esp32/bongo_cat_monitor.ino.bootloader.bin",
           "offset": 4096
         },
         {
-          "path": "build/esp32.esp32.esp32/bongo_cat.ino.partitions.bin",
+          "path": "build/esp32.esp32.esp32/bongo_cat_monitor.ino.partitions.bin",
           "offset": 32768
         },
         {
@@ -19,7 +19,7 @@
           "offset": 57344
         },
         {
-          "path": "build/esp32.esp32.esp32/bongo_cat.ino.bin",
+          "path": "build/esp32.esp32.esp32/bongo_cat_monitor.ino.bin",
           "offset": 65536
         }
       ]

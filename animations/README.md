@@ -66,7 +66,7 @@ The animation system supports multiple states:
    - Include the new `.c` file
 
 3. **Modify Animation Logic**
-   - Update `bongo_cat.ino` to use new animations
+   - Update `bongo_cat_monitor.ino` to use new animations
    - Add state transitions and timing
 
 ## 🎨 Animation Guidelines
