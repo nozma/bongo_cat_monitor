@@ -499,6 +499,25 @@ ipcMain.handle('get-typing-stats', async () => {
   }
 });
 
+ipcMain.handle('reset-typing-stats', async () => {
+  try {
+    if (!keyboardMonitor) {
+      throw new Error('Keyboard monitor not initialized');
+    }
+    keyboardMonitor.resetSession();
+    const stats = keyboardMonitor.getCurrentStats();
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('typing-stats', stats);
+    }
+
+    return { success: true, stats };
+  } catch (error) {
+    console.error('Reset typing stats error:', error);
+    throw error;
+  }
+});
+
 // Settings Management Handlers
 ipcMain.handle('get-settings', async () => {
   try {

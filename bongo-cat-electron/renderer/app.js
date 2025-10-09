@@ -11,6 +11,7 @@ const closeSettings = document.getElementById('closeSettings');
 const applySettings = document.getElementById('applySettings');
 const saveSettings = document.getElementById('saveSettings');
 const resetSettings = document.getElementById('resetSettings');
+const resetTypingBtn = document.getElementById('resetTypingBtn');
 
 
 // Stat display elements
@@ -79,6 +80,9 @@ function setupEventListeners() {
     resetSettings.addEventListener('click', resetAppSettings);
     showCount.addEventListener('change', () => updateWpmCountVisibility(showCount.checked));
     showWpm.addEventListener('change', () => updateWpmCountVisibility(showCount.checked));
+    if (resetTypingBtn) {
+        resetTypingBtn.addEventListener('click', resetTypingCount);
+    }
     
     // Close modal when clicking outside
     settingsModal.addEventListener('click', (e) => {
@@ -226,6 +230,35 @@ function updateTimeDisplay() {
     const now = new Date();
     const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     timeValue.textContent = timeString;
+}
+
+async function resetTypingCount() {
+    if (!window.electronAPI || !window.electronAPI.resetTypingStats) {
+        console.error('Reset typing API not available');
+        return;
+    }
+
+    if (!resetTypingBtn) {
+        return;
+    }
+
+    const button = resetTypingBtn;
+    const originalText = button.textContent;
+
+    try {
+        button.textContent = 'Resetting...';
+        button.disabled = true;
+
+        const result = await window.electronAPI.resetTypingStats();
+        if (result && result.stats) {
+            updateTypingStats(result.stats);
+        }
+    } catch (error) {
+        console.error('Failed to reset typing stats:', error);
+    } finally {
+        button.textContent = originalText;
+        button.disabled = false;
+    }
 }
 
 function formatMemoryStat(stats) {
