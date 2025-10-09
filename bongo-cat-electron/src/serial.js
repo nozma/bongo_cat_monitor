@@ -25,6 +25,7 @@ class ESP32SerialManager {
         // Animation state tracking
         this.streakModeActive = false;
         this.idleModeActive = false;
+        this.shuttingDown = false;
         
         console.log('ESP32 Serial Manager initialized');
     }
@@ -72,6 +73,7 @@ class ESP32SerialManager {
             if (this.isConnected) {
                 await this.disconnect();
             }
+            this.shuttingDown = false;
 
             const config = {
                 baudRate: options.baudRate || 115200,
@@ -145,6 +147,7 @@ class ESP32SerialManager {
     async disconnect() {
         try {
             console.log('Disconnecting from ESP32...');
+            this.shuttingDown = true;
             
             if (this.reconnectTimer) {
                 clearTimeout(this.reconnectTimer);
@@ -221,7 +224,7 @@ class ESP32SerialManager {
      */
     async sendCommand(command) {
         return new Promise((resolve, reject) => {
-            if (!this.isConnected || !this.port) {
+            if (!this.isConnected || !this.port || this.shuttingDown) {
                 reject(new Error('Not connected to ESP32'));
                 return;
             }
@@ -236,13 +239,18 @@ class ESP32SerialManager {
      * Process command queue with rate limiting
      */
     async processCommandQueue() {
-        if (this.isProcessingQueue || this.commandQueue.length === 0) {
+        if (this.isProcessingQueue || this.commandQueue.length === 0 || this.shuttingDown) {
             return;
         }
 
         this.isProcessingQueue = true;
 
         while (this.commandQueue.length > 0) {
+            if (this.shuttingDown) {
+                this.commandQueue = [];
+                break;
+            }
+
             const { command, resolve, reject } = this.commandQueue.shift();
 
             try {
@@ -256,6 +264,10 @@ class ESP32SerialManager {
                 // Send command
                 const fullCommand = `${command}\n`;
                 await new Promise((writeResolve, writeReject) => {
+                    if (!this.port || this.shuttingDown) {
+                        writeReject(new Error('Port unavailable'));
+                        return;
+                    }
                     this.port.write(fullCommand, (error) => {
                         if (error) {
                             writeReject(error);
@@ -286,6 +298,9 @@ class ESP32SerialManager {
      */
     async sendCombinedStats(systemStats, typingStats) {
         try {
+            if (this.shuttingDown) {
+                return;
+            }
             const cpu = Math.round(systemStats.cpu || 0);
             const ram = Math.round(systemStats.memory || 0);
             const wpm = Math.round(typingStats.wpm || 0);
@@ -493,7 +508,7 @@ class ESP32SerialManager {
         });
 
         // Attempt reconnection if configured
-        if (this.reconnectAttempts < this.maxReconnectAttempts && this.currentPortPath) {
+        if (!this.shuttingDown && this.reconnectAttempts < this.maxReconnectAttempts && this.currentPortPath) {
             this.reconnectAttempts++;
             console.log(`Attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts}...`);
             
@@ -511,12 +526,20 @@ class ESP32SerialManager {
      * Cleanup resources
      */
     async cleanup() {
+        this.shuttingDown = true;
         this.isConnected = false;
         this.commandQueue = [];
         this.isProcessingQueue = false;
+        this.streakModeActive = false;
+        this.idleModeActive = false;
         
         if (this.parser) {
-            this.parser.removeAllListeners();
+            try {
+                this.port?.unpipe?.(this.parser);
+                this.parser.removeAllListeners();
+            } catch (parserError) {
+                console.warn('Warning removing parser listeners:', parserError);
+            }
             this.parser = null;
         }
         
@@ -531,8 +554,64 @@ class ESP32SerialManager {
             });
         }
         
+        if (this.port) {
+            try {
+                this.port.removeAllListeners?.();
+            } catch (listenerError) {
+                console.warn('Warning removing port listeners:', listenerError);
+            }
+        }
+        
         this.port = null;
         this.currentPortPath = null;
+    }
+
+    /**
+     * Force shutdown without awaiting async operations (used during app quit)
+     */
+    forceShutdown() {
+        try {
+            this.shuttingDown = true;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
+
+            this.commandQueue = [];
+            this.isProcessingQueue = false;
+            this.streakModeActive = false;
+            this.idleModeActive = false;
+
+            if (this.parser) {
+                try {
+                    this.port?.unpipe?.(this.parser);
+                    this.parser.removeAllListeners();
+                } catch (parserError) {
+                    console.warn('Warning removing parser listeners during force shutdown:', parserError);
+                } finally {
+                    this.parser = null;
+                }
+            }
+
+            if (this.port) {
+                try {
+                    this.port.removeAllListeners?.();
+                    if (this.port.isOpen) {
+                        this.port.close(() => {});
+                    }
+                    this.port.destroy?.();
+                } catch (portError) {
+                    console.warn('Warning destroying serial port during force shutdown:', portError);
+                } finally {
+                    this.port = null;
+                }
+            }
+        } catch (error) {
+            console.error('Error forcing serial manager shutdown:', error);
+        } finally {
+            this.isConnected = false;
+            this.currentPortPath = null;
+        }
     }
 
     /**

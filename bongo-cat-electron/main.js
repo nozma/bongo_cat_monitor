@@ -26,6 +26,7 @@ let keyboardMonitor;
 // Monitoring state
 let monitoringActive = false;
 let timeUpdateTimer = null;
+let statsInterval = null;
 let macKeyServerReady = false;
 
 // Development mode indicator
@@ -199,13 +200,15 @@ function setupEventForwarding() {
   });
   
   // FAST STATS SENDING - Responsive like Python app
-  setInterval(() => {
-    if (esp32SerialManager && esp32SerialManager.getConnectionStatus().isConnected) {
-      // Send stats more frequently during active typing (like Python app)
-      const isTypingActive = lastTypingStats && lastTypingStats.isActive;
-      esp32SerialManager.sendCombinedStats(lastSystemStats, lastTypingStats);
-    }
-  }, 1000); // 1 second for responsive animations (was 2000ms)
+  if (!statsInterval) {
+    statsInterval = setInterval(() => {
+      if (esp32SerialManager && esp32SerialManager.getConnectionStatus().isConnected) {
+        // Send stats more frequently during active typing (like Python app)
+        const isTypingActive = lastTypingStats && lastTypingStats.isActive;
+        esp32SerialManager.sendCombinedStats(lastSystemStats, lastTypingStats);
+      }
+    }, 1000); // 1 second for responsive animations (was 2000ms)
+  }
   
   // Auto-start monitoring when app is ready
   setTimeout(async () => {
@@ -615,11 +618,33 @@ app.on('before-quit', async () => {
     
     // Disconnect ESP32
     if (esp32SerialManager && esp32SerialManager.getConnectionStatus().isConnected) {
+      esp32SerialManager.forceShutdown?.();
       await esp32SerialManager.disconnect();
     }
     
     console.log('App cleanup completed');
   } catch (error) {
     console.error('Error during app cleanup:', error);
+  }
+});
+
+app.on('will-quit', () => {
+  try {
+    if (statsInterval) {
+      clearInterval(statsInterval);
+      statsInterval = null;
+    }
+    if (timeUpdateTimer) {
+      clearInterval(timeUpdateTimer);
+      timeUpdateTimer = null;
+    }
+    if (keyboardMonitor) {
+      keyboardMonitor.forceShutdown?.();
+    }
+    if (esp32SerialManager) {
+      esp32SerialManager.forceShutdown?.();
+    }
+  } catch (error) {
+    console.error('Error during will-quit cleanup:', error);
   }
 });
