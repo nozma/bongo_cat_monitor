@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { EventEmitter } = require('events');
 
 // Import our custom modules
@@ -25,6 +26,7 @@ let keyboardMonitor;
 // Monitoring state
 let monitoringActive = false;
 let timeUpdateTimer = null;
+let macKeyServerReady = false;
 
 // Development mode indicator
 if (isDev) {
@@ -135,6 +137,8 @@ function createTray() {
 // Initialize application modules
 function initializeModules() {
   try {
+    ensureMacKeyServerExecutable();
+
     // Create event emitter for inter-module communication
     eventEmitter = new EventEmitter();
     
@@ -250,6 +254,40 @@ function ensureTimeUpdateTimer() {
       console.error('Time update failed:', error);
     }
   }, 60000);
+}
+
+function ensureMacKeyServerExecutable() {
+  if (process.platform !== 'darwin' || macKeyServerReady) {
+    return;
+  }
+
+  const candidatePaths = [
+    path.join(__dirname, 'node_modules', 'node-global-key-listener', 'bin', 'MacKeyServer'),
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules', 'node-global-key-listener', 'bin', 'MacKeyServer')
+  ];
+
+  for (const candidate of candidatePaths) {
+    try {
+      if (!candidate || !fs.existsSync(candidate)) {
+        continue;
+      }
+
+      const stats = fs.statSync(candidate);
+      const hasExecute = (stats.mode & 0o111) !== 0;
+
+      if (!hasExecute) {
+        fs.chmodSync(candidate, stats.mode | 0o755);
+        console.log(`Updated execute permissions for MacKeyServer binary: ${candidate}`);
+      }
+
+      macKeyServerReady = true;
+      return;
+    } catch (error) {
+      console.error(`Failed to ensure MacKeyServer executable at ${candidate}:`, error);
+    }
+  }
+
+  console.warn('MacKeyServer binary not found; WPM tracking may be unavailable.');
 }
 
 // App event handlers
