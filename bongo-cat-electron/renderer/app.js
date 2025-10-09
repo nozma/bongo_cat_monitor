@@ -15,6 +15,7 @@ const resetSettings = document.getElementById('resetSettings');
 
 // Stat display elements
 const wpmValue = document.getElementById('wpmValue');
+const wpmCount = document.getElementById('wpmCount');
 const cpuValue = document.getElementById('cpuValue');
 const ramValue = document.getElementById('ramValue');
 const timeValue = document.getElementById('timeValue');
@@ -23,6 +24,7 @@ const timeValue = document.getElementById('timeValue');
 const showCpu = document.getElementById('showCpu');
 const showRam = document.getElementById('showRam');
 const showWpm = document.getElementById('showWpm');
+const showCount = document.getElementById('showCount');
 const showTime = document.getElementById('showTime');
 const timeFormat = document.getElementById('timeFormat');
 const sleepTimeout = document.getElementById('sleepTimeout');
@@ -74,6 +76,8 @@ function setupEventListeners() {
     applySettings.addEventListener('click', applyAppSettings);
     saveSettings.addEventListener('click', saveAppSettings);
     resetSettings.addEventListener('click', resetAppSettings);
+    showCount.addEventListener('change', () => updateWpmCountVisibility(showCount.checked));
+    showWpm.addEventListener('change', () => updateWpmCountVisibility(showCount.checked));
     
     // Close modal when clicking outside
     settingsModal.addEventListener('click', (e) => {
@@ -208,6 +212,9 @@ function updateTypingStats(stats) {
         const wpmText = `${Math.round(stats.wpm)} WPM`;
 
         wpmValue.textContent = wpmText;
+        if (stats.totalKeystrokes !== undefined && wpmCount) {
+            wpmCount.textContent = `Count: ${stats.totalKeystrokes}`;
+        }
     } else {
 
     }
@@ -237,9 +244,11 @@ async function loadSettings() {
         showCpu.checked = settings.showCpu !== false; // default true
         showRam.checked = settings.showRam !== false; // default true
         showWpm.checked = settings.showWpm !== false; // default true
+        showCount.checked = settings.showCount !== false; // default true
         showTime.checked = settings.showTime !== false; // default true
         timeFormat.value = settings.timeFormat || '24'; // default 24-hour
         sleepTimeout.value = settings.sleepTimeout || 5; // default 5 minutes
+        updateWpmCountVisibility(showCount.checked);
         
     } catch (error) {
         console.error('Failed to load settings:', error);
@@ -268,6 +277,7 @@ async function applyAppSettings() {
             showCpu: showCpu.checked,
             showRam: showRam.checked,
             showWpm: showWpm.checked,
+            showCount: showCount.checked,
             showTime: showTime.checked,
             timeFormat: timeFormat.value,
             sleepTimeout: parseInt(sleepTimeout.value)
@@ -282,6 +292,7 @@ async function applyAppSettings() {
             applyBtn.textContent = originalText;
             applyBtn.disabled = false;
         }, 1000);
+        updateWpmCountVisibility(showCount.checked);
         
     } catch (error) {
         console.error('Failed to apply settings:', error);
@@ -311,6 +322,7 @@ async function saveAppSettings() {
             showCpu: showCpu.checked,
             showRam: showRam.checked,
             showWpm: showWpm.checked,
+            showCount: showCount.checked,
             showTime: showTime.checked,
             timeFormat: timeFormat.value,
             sleepTimeout: parseInt(sleepTimeout.value)
@@ -325,6 +337,7 @@ async function saveAppSettings() {
             saveBtn.disabled = false;
             hideSettings();
         }, 1000);
+        updateWpmCountVisibility(showCount.checked);
         
     } catch (error) {
         console.error('Failed to save settings:', error);
@@ -341,6 +354,7 @@ async function resetAppSettings() {
     try {
         await window.electronAPI.resetSettings();
         await loadSettings(); // Reload the reset settings
+        updateWpmCountVisibility(showCount.checked);
 
         
     } catch (error) {
@@ -349,6 +363,11 @@ async function resetAppSettings() {
     }
 }
 
+function updateWpmCountVisibility(visible) {
+    if (!wpmCount) return;
+    const shouldShow = visible && showWpm.checked;
+    wpmCount.style.display = shouldShow ? '' : 'none';
+}
 
 
 

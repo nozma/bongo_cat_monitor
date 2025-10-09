@@ -207,6 +207,7 @@ class ESP32SerialManager {
             await this.sendCommand('RAM:0');
             await this.sleep(50);
             await this.sendCommand('WPM:0');
+            await this.sendCommand('COUNT:0');
             
             console.log('Initial sync completed');
         } catch (error) {
@@ -288,9 +289,10 @@ class ESP32SerialManager {
             const cpu = Math.round(systemStats.cpu || 0);
             const ram = Math.round(systemStats.memory || 0);
             const wpm = Math.round(typingStats.wpm || 0);
+            const count = Math.round(typingStats.totalKeystrokes || 0);
             
-            // Use original engine.py format: STATS:CPU:X,RAM:Y,WPM:Z
-            const statsCommand = `STATS:CPU:${cpu},RAM:${ram},WPM:${wpm}`;
+            // Use extended format with count: STATS:CPU:X,RAM:Y,WPM:Z,COUNT:N
+            const statsCommand = `STATS:CPU:${cpu},RAM:${ram},WPM:${wpm},COUNT:${count}`;
             await this.sendCommand(statsCommand);
             
             // Send animation commands based on WPM
@@ -419,6 +421,9 @@ class ESP32SerialManager {
             await this.sleep(50);
             
             await this.sendCommand(`DISPLAY_WPM:${settings.showWpm ? 'ON' : 'OFF'}`);
+            await this.sleep(50);
+            
+            await this.sendCommand(`DISPLAY_COUNT:${settings.showCount ? 'ON' : 'OFF'}`);
             await this.sleep(50);
             
             await this.sendCommand(`DISPLAY_TIME:${settings.showTime ? 'ON' : 'OFF'}`);
