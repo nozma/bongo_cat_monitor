@@ -48,7 +48,7 @@ This board includes:
 4. **Click "Install"** and wait for the process to complete
 
 ### Option 2: Arduino IDE
-1. Open `bongo_cat.ino` in Arduino IDE
+1. Open `bongo_cat_monitor.ino` in Arduino IDE
 2. Install required libraries (see Configuration section)
 3. Select your ESP32 board and upload
 
@@ -103,7 +103,7 @@ This board includes:
 │   └── 📸 settings.png        # Screenshots for documentation
 ├── 📁 3d_printing/            # 3D printable case files (coming soon)
 │   └── 📄 case.3mf            # 3MF format case file
-├── 📄 bongo_cat.ino           # Main ESP32 firmware
+├── 📄 bongo_cat_monitor.ino   # Main ESP32 firmware
 ├── 📄 animations_sprites.h    # Sprite data header
 ├── 📄 lv_conf.h              # LVGL configuration
 ├── 📄 User_Setup.h           # TFT_eSPI library configuration
@@ -132,7 +132,7 @@ The Bongo Cat features a sophisticated animation system with multiple states:
 ### Adding Custom Animations
 1. Create your sprite data in the `animations/` folder
 2. Update `animations_sprites.h` with new sprite definitions
-3. Modify the animation logic in `bongo_cat.ino`
+3. Modify the animation logic in `bongo_cat_monitor.ino`
 
 ## ⚙️ Configuration
 
@@ -170,7 +170,7 @@ The `lv_conf.h` file configures the LVGL graphics library:
    ```
 
 2. **ESP32 Firmware**
-   - Open `bongo_cat.ino` in Arduino IDE
+   - Open `bongo_cat_monitor.ino` in Arduino IDE
    - Ensure libraries are installed
    - Upload to your ESP32
 
@@ -240,5 +240,4 @@ This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.t
 - **Web Flasher**: [https://vostoklabs.github.io/Bongo_cat_webflasher/](https://vostoklabs.github.io/Bongo_cat_webflasher/)
 
 ---
-
 
