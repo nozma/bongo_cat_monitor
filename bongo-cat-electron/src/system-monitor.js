@@ -1,4 +1,8 @@
 const si = require('systeminformation');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+
+const execFileAsync = promisify(execFile);
 
 /**
  * System Monitor
@@ -15,6 +19,10 @@ class SystemMonitor {
         this.lastStats = {
             cpu: 0,
             memory: 0,
+            memoryDetails: {
+                usedBytes: 0,
+                totalBytes: 0
+            },
             timestamp: Date.now()
         };
         
@@ -89,6 +97,81 @@ class SystemMonitor {
     }
 
     /**
+     * macOS-specific memory breakdown using vm_stat to align with Activity Monitor
+     */
+    async _getMacMemoryBreakdown() {
+        try {
+            const { stdout } = await execFileAsync('vm_stat');
+            const lines = stdout
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length);
+
+            const pageSizeMatch = lines[0]?.match(/page size of (\d+) bytes/);
+            const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;
+
+            const findLine = (label) => lines.find(l => l.startsWith(label));
+
+            const parsePages = (label) => {
+                const line = findLine(label);
+                if (!line) return 0;
+                const match = line.match(/:\s*([\d\.]+)/);
+                if (!match) return 0;
+                // Values end with a period; remove and parse
+                return parseInt(match[1].replace('.', ''), 10) || 0;
+            };
+
+            const activePages = parsePages('Pages active');
+            const speculativePages = parsePages('Pages speculative');
+            const wiredPages = parsePages('Pages wired down');
+            const compressedPages = parsePages('Pages occupied by compressor');
+            const inactivePages = parsePages('Pages inactive');
+            const fileBackedPages = parsePages('File-backed pages');
+            const purgeablePages = parsePages('Pages purgeable');
+            const anonymousPages = parsePages('Anonymous pages');
+
+            const activeBytes = (activePages + speculativePages) * pageSize;
+            const inactiveBytes = inactivePages * pageSize;
+            const compressedBytes = compressedPages * pageSize;
+            const wiredBytes = wiredPages * pageSize;
+            const fileBackedBytes = fileBackedPages * pageSize;
+            const purgeableBytes = purgeablePages * pageSize;
+            const anonymousBytes = anonymousPages * pageSize;
+
+            // Approximate Activity Monitor metrics:
+            // App Memory ≈ Anonymous memory (private) + compressed
+            let appBytes = anonymousBytes + compressedBytes;
+
+            // Fallback if anonymous not available
+            if (!appBytes && (activeBytes || inactiveBytes)) {
+                appBytes = Math.max(
+                    0,
+                    (activeBytes + inactiveBytes) - fileBackedBytes
+                ) + compressedBytes;
+            }
+
+            const usedBytes = appBytes + wiredBytes;
+
+            return {
+                source: 'vm_stat',
+                pageSize,
+                activeBytes,
+                wiredBytes,
+                compressedBytes,
+                inactiveBytes,
+                fileBackedBytes,
+                purgeableBytes,
+                anonymousBytes,
+                appBytes,
+                usedBytes
+            };
+        } catch (error) {
+            console.warn('Failed to read macOS memory breakdown via vm_stat:', error.message);
+            return null;
+        }
+    }
+
+    /**
      * Update system statistics
      */
     async updateSystemStats() {
@@ -97,9 +180,51 @@ class SystemMonitor {
             const cpuLoad = await si.currentLoad();
             const cpuUsage = cpuLoad.currentLoad || 0;
 
-            // Get memory usage
+            // Get memory usage with platform-specific adjustments
             const memoryInfo = await si.mem();
-            const memoryUsage = ((memoryInfo.used / memoryInfo.total) * 100) || 0;
+            const totalBytes = memoryInfo.total || 0;
+
+            let breakdownDetails = {};
+            let usedBytes = memoryInfo.used || 0;
+            if (totalBytes > 0) {
+                if (process.platform === 'darwin') {
+                    const macBreakdown = await this._getMacMemoryBreakdown().catch(() => null);
+                    if (macBreakdown && macBreakdown.usedBytes > 0) {
+                        usedBytes = macBreakdown.usedBytes;
+                        breakdownDetails = macBreakdown;
+                    } else {
+                        const active = memoryInfo.active || 0;
+                        const wired = memoryInfo.wired || 0;
+                        const compressed = memoryInfo.compressed || 0;
+                        const computedUsed = active + wired + compressed;
+                        if (computedUsed > 0) {
+                            usedBytes = computedUsed;
+                            breakdownDetails = {
+                                source: 'systeminformation',
+                                activeBytes: active,
+                                wiredBytes: wired,
+                                compressedBytes: compressed,
+                                appBytes: active + compressed,
+                                usedBytes: computedUsed
+                            };
+                        }
+                    }
+                } else {
+                    // Exclude cache/buffers for other platforms when available
+                    const buffers = memoryInfo.buffers || 0;
+                    const cached = (memoryInfo.cached || 0) + (memoryInfo.buffcache || 0);
+                    const computedUsed = memoryInfo.used - buffers - cached;
+                    if (computedUsed > 0) {
+                        usedBytes = computedUsed;
+                    }
+                }
+            }
+
+            if (totalBytes > 0) {
+                usedBytes = Math.min(Math.max(usedBytes, 0), totalBytes);
+            }
+
+            const memoryUsage = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0;
 
             // Smooth CPU readings to reduce fluctuation
             this.cpuLoadArray.push(cpuUsage);
@@ -113,6 +238,11 @@ class SystemMonitor {
             this.lastStats = {
                 cpu: Math.round(smoothedCpu * 10) / 10, // Round to 1 decimal
                 memory: Math.round(memoryUsage * 10) / 10, // Round to 1 decimal
+                memoryDetails: {
+                    usedBytes,
+                    totalBytes,
+                    ...breakdownDetails
+                },
                 timestamp: Date.now()
             };
 

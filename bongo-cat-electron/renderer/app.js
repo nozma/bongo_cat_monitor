@@ -201,7 +201,7 @@ function updateSystemStats(stats) {
         cpuValue.textContent = `${Math.round(stats.cpu)}%`;
     }
     if (stats.memory !== undefined) {
-        ramValue.textContent = `${Math.round(stats.memory)}%`;
+        ramValue.textContent = formatMemoryStat(stats);
     }
 }
 
@@ -225,6 +225,17 @@ function updateTimeDisplay() {
     const now = new Date();
     const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     timeValue.textContent = timeString;
+}
+
+function formatMemoryStat(stats) {
+    const percent = `${Math.round(stats.memory)}%`;
+    const details = stats.memoryDetails;
+    if (!details || !details.totalBytes) {
+        return percent;
+    }
+    const usedGB = details.usedBytes / (1024 ** 3);
+    const totalGB = details.totalBytes / (1024 ** 3);
+    return `${percent} (${usedGB.toFixed(1)}/${totalGB.toFixed(1)} GB)`;
 }
 
 // Settings management
