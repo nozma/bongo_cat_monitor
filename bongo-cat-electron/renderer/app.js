@@ -28,6 +28,7 @@ const showCount = document.getElementById('showCount');
 const showTime = document.getElementById('showTime');
 const timeFormat = document.getElementById('timeFormat');
 const sleepTimeout = document.getElementById('sleepTimeout');
+const displaySleepTimeout = document.getElementById('displaySleepTimeout');
 
 // Application state
 let isConnected = false;
@@ -259,6 +260,9 @@ async function loadSettings() {
         showTime.checked = settings.showTime !== false; // default true
         timeFormat.value = settings.timeFormat || '24'; // default 24-hour
         sleepTimeout.value = settings.sleepTimeout || 5; // default 5 minutes
+        displaySleepTimeout.value = (typeof settings.displaySleepTimeout === 'number')
+            ? settings.displaySleepTimeout
+            : 10;
         updateWpmCountVisibility(showCount.checked);
         
     } catch (error) {
@@ -284,6 +288,7 @@ async function applyAppSettings() {
         applyBtn.textContent = 'Applying...';
         applyBtn.disabled = true;
         
+        const parsedDisplaySleep = Math.max(0, Math.min(120, parseInt(displaySleepTimeout.value, 10) || 0));
         const settings = {
             showCpu: showCpu.checked,
             showRam: showRam.checked,
@@ -291,8 +296,10 @@ async function applyAppSettings() {
             showCount: showCount.checked,
             showTime: showTime.checked,
             timeFormat: timeFormat.value,
-            sleepTimeout: parseInt(sleepTimeout.value)
+            sleepTimeout: parseInt(sleepTimeout.value, 10),
+            displaySleepTimeout: parsedDisplaySleep
         };
+        displaySleepTimeout.value = settings.displaySleepTimeout;
         
         console.log('Attempting to apply settings:', settings);
         await window.electronAPI.applySettings(settings);
@@ -329,6 +336,7 @@ async function saveAppSettings() {
         saveBtn.textContent = 'Saving...';
         saveBtn.disabled = true;
         
+        const parsedDisplaySleep = Math.max(0, Math.min(120, parseInt(displaySleepTimeout.value, 10) || 0));
         const settings = {
             showCpu: showCpu.checked,
             showRam: showRam.checked,
@@ -336,8 +344,10 @@ async function saveAppSettings() {
             showCount: showCount.checked,
             showTime: showTime.checked,
             timeFormat: timeFormat.value,
-            sleepTimeout: parseInt(sleepTimeout.value)
+            sleepTimeout: parseInt(sleepTimeout.value, 10),
+            displaySleepTimeout: parsedDisplaySleep
         };
+        displaySleepTimeout.value = settings.displaySleepTimeout;
         
         await window.electronAPI.saveSettings(settings);
         

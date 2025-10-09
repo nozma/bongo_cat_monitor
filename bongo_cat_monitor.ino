@@ -5,6 +5,30 @@
 #include "Free_Fonts.h"
 #include "animations_sprites.h"
 
+#ifndef TFT_DISPOFF
+#define TFT_DISPOFF 0x28
+#endif
+
+#ifndef TFT_DISPON
+#define TFT_DISPON 0x29
+#endif
+
+#ifndef TFT_SLPIN
+#define TFT_SLPIN 0x10
+#endif
+
+#ifndef TFT_SLPOUT
+#define TFT_SLPOUT 0x11
+#endif
+
+#ifdef TFT_BL
+#if TFT_BACKLIGHT_ON == HIGH
+#define TFT_BACKLIGHT_OFF LOW
+#else
+#define TFT_BACKLIGHT_OFF HIGH
+#endif
+#endif
+
 // Display settings
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT 320
@@ -18,6 +42,7 @@ struct BongoCatSettings {
     bool show_time = true;
     bool time_format_24h = true;
     int sleep_timeout_minutes = 5;
+    int display_sleep_timeout_minutes = 10;
     float animation_sensitivity = 1.0;
     uint32_t checksum = 0;  // For validation
 };
@@ -69,6 +94,11 @@ int wpm_speed = 0;
 uint32_t typing_count = 0;
 String current_time_str = "00:00";
 bool time_initialized = false;  // Track if we've received time from Python
+
+// Display power management
+bool display_sleeping = false;
+bool force_refresh_pending = false;
+uint32_t last_typing_activity_time = 0;
 
 // Function to flush the display buffer
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
@@ -148,6 +178,7 @@ uint32_t calculateChecksum(const BongoCatSettings* s) {
 bool validateSettings(const BongoCatSettings* s) {
     // Check if settings are within valid ranges
     if (s->sleep_timeout_minutes < 1 || s->sleep_timeout_minutes > 60) return false;
+    if (s->display_sleep_timeout_minutes < 0 || s->display_sleep_timeout_minutes > 120) return false;
     if (s->animation_sensitivity < 0.1 || s->animation_sensitivity > 5.0) return false;
     
     // Check if checksum matches
@@ -185,6 +216,7 @@ void resetSettings() {
     settings.show_time = true;
     settings.time_format_24h = true;
     settings.sleep_timeout_minutes = 5;
+    settings.display_sleep_timeout_minutes = 10;
     settings.animation_sensitivity = 1.0;
     settings.checksum = calculateChecksum(&settings);
     
@@ -240,6 +272,65 @@ void updateDisplayVisibility() {
     }
 }
 
+void wakeDisplay() {
+    if (!display_sleeping) {
+        return;
+    }
+
+#ifdef TFT_BL
+    digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
+#endif
+    tft.writecommand(TFT_SLPOUT);
+    delay(120);  // Allow panel to wake fully
+    tft.writecommand(TFT_DISPON);
+    delay(10);
+    display_sleeping = false;
+    force_refresh_pending = true;  // Force canvas refresh on wake
+    Serial.println("💡 Display woke from sleep");
+}
+
+void enterDisplaySleep() {
+    if (display_sleeping) {
+        return;
+    }
+
+    Serial.println("📴 Entering display sleep mode");
+    tft.writecommand(TFT_DISPOFF);
+    delay(10);
+    tft.writecommand(TFT_SLPIN);
+    delay(120);  // Give panel time to enter sleep
+#ifdef TFT_BL
+    digitalWrite(TFT_BL, TFT_BACKLIGHT_OFF);
+#endif
+    display_sleeping = true;
+}
+
+void markUserActivity(bool typingDetected, uint32_t current_time) {
+    if (!typingDetected) {
+        return;
+    }
+
+    last_typing_activity_time = current_time;
+
+    if (display_sleeping) {
+        wakeDisplay();
+    }
+}
+
+void updateDisplayPowerState(uint32_t current_time) {
+    if (settings.display_sleep_timeout_minutes <= 0) {
+        if (display_sleeping) {
+            wakeDisplay();
+        }
+        return;
+    }
+
+    uint32_t timeout_ms = (uint32_t)settings.display_sleep_timeout_minutes * 60UL * 1000UL;
+    if (!display_sleeping && (current_time - last_typing_activity_time >= timeout_ms)) {
+        enterDisplaySleep();
+    }
+}
+
 // Handle serial commands from Python script
 void handleSerialCommands() {
     if (Serial.available()) {
@@ -288,6 +379,7 @@ void handleSerialCommands() {
             last_command_time = current_time;
             python_control_mode = true;
             sprite_manager.idle_progression_enabled = false;
+            markUserActivity(speed > 0, current_time);
         } else if (command == "STOP") {
             // Explicit stop command - better than IDLE
             sprite_manager_set_state(&sprite_manager, ANIM_STATE_IDLE_STAGE1, current_time);
@@ -353,6 +445,7 @@ void handleSerialCommands() {
             }
             
             updateSystemStats(cpu, ram, wpm, count);
+            markUserActivity(wpm > 0, current_time);
             
         } else if (command.startsWith("TIME:")) {
             // Handle time updates from Python script
@@ -373,6 +466,7 @@ void handleSerialCommands() {
             // Handle WPM display updates
             wpm_speed = command.substring(4).toInt();
             updateSystemStats(cpu_usage, ram_usage, wpm_speed, typing_count);
+            markUserActivity(wpm_speed > 0, current_time);
             
         } else if (command.startsWith("COUNT:")) {
             typing_count = command.substring(6).toInt();
@@ -444,6 +538,21 @@ void handleSerialCommands() {
                 Serial.println("😴 Sleep timeout: " + String(timeout) + " minutes");
             } else {
                 Serial.println("❌ Invalid sleep timeout (1-60 minutes)");
+            }
+            
+        } else if (command.startsWith("DISPLAY_SLEEP_TIMEOUT:")) {
+            int timeout = command.substring(22).toInt();
+            if (timeout >= 0 && timeout <= 120) {
+                settings.display_sleep_timeout_minutes = timeout;
+                last_typing_activity_time = current_time;
+                if (timeout == 0) {
+                    Serial.println("💡 Display sleep disabled");
+                    wakeDisplay();
+                } else {
+                    Serial.println("🕒 Display sleep timeout: " + String(timeout) + " minutes");
+                }
+            } else {
+                Serial.println("❌ Invalid display sleep timeout (0-120 minutes)");
             }
             
         } else if (command.startsWith("SENSITIVITY:")) {
@@ -837,6 +946,12 @@ const char* get_state_name(animation_state_t state) {
 void setup() {
     Serial.begin(115200);
     Serial.println("🐱 Bongo Cat with Sprites Starting...");
+
+#ifdef TFT_BL
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
+#endif
+    last_typing_activity_time = millis();
     
     // Initialize EEPROM for settings persistence
     EEPROM.begin(EEPROM_SIZE);
@@ -934,9 +1049,13 @@ void loop() {
     handleSerialCommands();
     
     uint32_t current_time = millis();
+    updateDisplayPowerState(current_time);
     
     // Update animations - removed fixed frame rate to prevent conflicts
     static uint32_t last_animation_update = 0;
+    if (force_refresh_pending) {
+        last_animation_update = 0;  // Force immediate processing
+    }
     if (current_time - last_animation_update >= 25) {  // 40 FPS max (more responsive)
         sprite_manager_update(&sprite_manager, current_time);
         
@@ -945,16 +1064,19 @@ void loop() {
         uint32_t current_sprite_hash = 0;
         
         // Calculate simple hash of current sprites to detect changes (optimized)
-        for (int i = 0; i < NUM_LAYERS; i++) {
-            current_sprite_hash += (uint32_t)sprite_manager.current_sprites[i];
+        if (!display_sleeping) {
+            for (int i = 0; i < NUM_LAYERS; i++) {
+                current_sprite_hash += (uint32_t)sprite_manager.current_sprites[i];
+            }
+            
+            // Only re-render if sprites changed or it's been too long (forced refresh)
+            if (force_refresh_pending || current_sprite_hash != last_sprite_hash || (current_time - last_animation_update) > 200) {
+                sprite_render_layers(&sprite_manager, cat_canvas, current_time);
+                last_sprite_hash = current_sprite_hash;
+            }
         }
         
-        // Only re-render if sprites changed or it's been too long (forced refresh)
-        if (current_sprite_hash != last_sprite_hash || (current_time - last_animation_update) > 200) {
-            sprite_render_layers(&sprite_manager, cat_canvas, current_time);
-            last_sprite_hash = current_sprite_hash;
-        }
-        
+        force_refresh_pending = false;
         last_animation_update = current_time;
     }
     
