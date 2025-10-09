@@ -453,6 +453,11 @@ class ESP32SerialManager {
                 await this.sendCommand(`SLEEP_TIMEOUT:${settings.sleepTimeout}`);
                 await this.sleep(50);
             }
+
+            if (typeof settings.displaySleepTimeout === 'number') {
+                await this.sendCommand(`DISPLAY_SLEEP_TIMEOUT:${settings.displaySleepTimeout}`);
+                await this.sleep(50);
+            }
             
             // Save settings to ESP32 EEPROM for persistence
             await this.sendCommand('SAVE_SETTINGS');
