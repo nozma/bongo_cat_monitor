@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { EventEmitter } = require('events');
@@ -28,6 +28,21 @@ let monitoringActive = false;
 let timeUpdateTimer = null;
 let statsInterval = null;
 let macKeyServerReady = false;
+
+// Power management tracking
+const RESUME_RETRY_BASE_DELAY_MS = 1000;
+const RESUME_RETRY_MAX_DELAY_MS = 30000;
+const RESUME_RETRY_LIMIT = 10;
+const KEYBOARD_RECOVERY_BASE_DELAY_MS = 2000;
+const KEYBOARD_RECOVERY_MAX_DELAY_MS = 60000;
+const KEYBOARD_RECOVERY_LIMIT = 5;
+let powerHandlersInitialized = false;
+let systemSuspended = false;
+let pendingResumePort = null;
+let resumeReconnectTimer = null;
+let resumeReconnectAttempts = 0;
+let keyboardRecoveryTimer = null;
+let keyboardRecoveryAttempts = 0;
 
 // Development mode indicator
 if (isDev) {
@@ -159,6 +174,7 @@ function initializeModules() {
     
     // Set up event forwarding to renderer
     setupEventForwarding();
+    setupPowerManagementHandlers();
     
     console.log('All modules initialized successfully');
   } catch (error) {
@@ -169,6 +185,9 @@ function initializeModules() {
 // Setup event forwarding from modules to renderer
 function setupEventForwarding() {
   eventEmitter.on('connection-change', (data) => {
+    if (data?.connected && data.port) {
+      pendingResumePort = data.port;
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('connection-change', data);
     }
@@ -205,6 +224,7 @@ function setupEventForwarding() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('keyboard-fallback', data);
     }
+    scheduleKeyboardRecovery(KEYBOARD_RECOVERY_BASE_DELAY_MS);
   });
   
   // FAST STATS SENDING - Responsive like Python app
@@ -250,6 +270,218 @@ function setupEventForwarding() {
   });
 
   ensureTimeUpdateTimer();
+}
+
+function clearResumeReconnectTimer() {
+  if (resumeReconnectTimer) {
+    clearTimeout(resumeReconnectTimer);
+    resumeReconnectTimer = null;
+  }
+}
+
+function clearKeyboardRecoveryTimer() {
+  if (keyboardRecoveryTimer) {
+    clearTimeout(keyboardRecoveryTimer);
+    keyboardRecoveryTimer = null;
+  }
+}
+
+function scheduleResumeReconnect(delayMs = RESUME_RETRY_BASE_DELAY_MS) {
+  if (systemSuspended) {
+    return;
+  }
+
+  clearResumeReconnectTimer();
+  resumeReconnectTimer = setTimeout(() => {
+    attemptResumeReconnect().catch((error) => {
+      console.error('Unexpected error during resume reconnect attempt:', error);
+    });
+  }, delayMs);
+}
+
+async function attemptResumeReconnect() {
+  if (!pendingResumePort || !esp32SerialManager || systemSuspended) {
+    return;
+  }
+
+  if (esp32SerialManager.getConnectionStatus().isConnected) {
+    pendingResumePort = null;
+    resumeReconnectAttempts = 0;
+    clearResumeReconnectTimer();
+    return;
+  }
+
+  const attemptNumber = ++resumeReconnectAttempts;
+
+  try {
+    const ports = await esp32SerialManager.getAvailablePorts();
+    const matchingPort = ports.find(port => port.path === pendingResumePort);
+
+    if (!matchingPort) {
+      throw new Error(`Port ${pendingResumePort} not yet available`);
+    }
+
+    await esp32SerialManager.connectToDevice(pendingResumePort);
+    console.log(`Reconnected to ESP32 on ${pendingResumePort} after resume`);
+    pendingResumePort = null;
+    resumeReconnectAttempts = 0;
+    clearResumeReconnectTimer();
+  } catch (error) {
+    console.error(`Resume reconnect attempt ${attemptNumber} failed:`, error);
+
+    if (attemptNumber >= RESUME_RETRY_LIMIT) {
+      console.warn('Resume reconnect attempts exhausted; leaving device disconnected');
+      clearResumeReconnectTimer();
+      return;
+    }
+
+    const nextDelay = Math.min(
+      RESUME_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNumber - 1),
+      RESUME_RETRY_MAX_DELAY_MS
+    );
+    scheduleResumeReconnect(nextDelay);
+  }
+}
+
+async function restartKeyboardMonitoring(options = {}) {
+  const { force = false } = options;
+
+  if (!keyboardMonitor) {
+    throw new Error('Keyboard monitor not initialized');
+  }
+
+  if (!force && !keyboardMonitor.isActive?.()) {
+    return;
+  }
+
+  const previousSession = keyboardMonitor.currentSession
+    ? { ...keyboardMonitor.currentSession }
+    : null;
+
+  try {
+    await keyboardMonitor.stopMonitoring();
+    await keyboardMonitor.startMonitoring();
+
+    if (previousSession && keyboardMonitor.currentSession) {
+      keyboardMonitor.currentSession.totalKeystrokes = previousSession.totalKeystrokes || 0;
+      keyboardMonitor.currentSession.startTime = previousSession.startTime ?? null;
+      keyboardMonitor.currentSession.lastKeystrokeTime = previousSession.lastKeystrokeTime || 0;
+    }
+    keyboardRecoveryAttempts = 0;
+    clearKeyboardRecoveryTimer();
+    console.log('Keyboard monitoring restarted');
+  } catch (error) {
+    console.error('Failed to restart keyboard monitoring:', error);
+    throw error;
+  }
+}
+
+function scheduleKeyboardRecovery(delayMs = KEYBOARD_RECOVERY_BASE_DELAY_MS) {
+  if (systemSuspended || !keyboardMonitor) {
+    return;
+  }
+
+  clearKeyboardRecoveryTimer();
+  keyboardRecoveryTimer = setTimeout(() => {
+    attemptKeyboardRecovery().catch((error) => {
+      console.error('Unexpected error during keyboard monitoring recovery:', error);
+    });
+  }, delayMs);
+}
+
+async function attemptKeyboardRecovery() {
+  if (systemSuspended || !keyboardMonitor) {
+    return;
+  }
+
+  const listenerActive = !!(keyboardMonitor.keyboardListener && keyboardMonitor.keyboardListener.kill);
+  if (listenerActive && !keyboardMonitor.fallbackMode) {
+    clearKeyboardRecoveryTimer();
+    keyboardRecoveryAttempts = 0;
+    return;
+  }
+
+  const attemptNumber = ++keyboardRecoveryAttempts;
+  console.log(`Attempting keyboard monitoring recovery (${attemptNumber}/${KEYBOARD_RECOVERY_LIMIT})`);
+
+  try {
+    await keyboardMonitor.stopMonitoring();
+    await keyboardMonitor.startMonitoring();
+    keyboardRecoveryAttempts = 0;
+    clearKeyboardRecoveryTimer();
+    console.log('Keyboard monitoring recovered successfully');
+  } catch (error) {
+    console.error(`Keyboard monitoring recovery attempt ${attemptNumber} failed:`, error);
+
+    if (attemptNumber >= KEYBOARD_RECOVERY_LIMIT) {
+      console.warn('Keyboard monitoring recovery attempts exhausted');
+      clearKeyboardRecoveryTimer();
+      return;
+    }
+
+    const nextDelay = Math.min(
+      KEYBOARD_RECOVERY_BASE_DELAY_MS * Math.pow(2, attemptNumber - 1),
+      KEYBOARD_RECOVERY_MAX_DELAY_MS
+    );
+    scheduleKeyboardRecovery(nextDelay);
+  }
+}
+
+function setupPowerManagementHandlers() {
+  if (powerHandlersInitialized || !powerMonitor) {
+    return;
+  }
+
+  powerHandlersInitialized = true;
+
+  powerMonitor.on('suspend', async () => {
+    systemSuspended = true;
+    clearResumeReconnectTimer();
+    resumeReconnectAttempts = 0;
+
+    if (!esp32SerialManager) {
+      return;
+    }
+
+    try {
+      const status = esp32SerialManager.getConnectionStatus();
+
+      if (status?.isConnected && status.port) {
+        pendingResumePort = status.port;
+        console.log(`System suspend detected; disconnecting ESP32 on ${status.port}`);
+        await esp32SerialManager.disconnect();
+      } else if (status?.port) {
+        pendingResumePort = status.port;
+      }
+    } catch (error) {
+      console.error('Error handling system suspend for ESP32:', error);
+    }
+  });
+
+  powerMonitor.on('resume', () => {
+    systemSuspended = false;
+    resumeReconnectAttempts = 0;
+    console.log('System resume detected; scheduling ESP32 reconnection');
+
+    if (pendingResumePort && esp32SerialManager) {
+      scheduleResumeReconnect(RESUME_RETRY_BASE_DELAY_MS);
+    }
+
+    restartKeyboardMonitoring().catch((error) => {
+      console.error('Error restarting keyboard monitoring after resume:', error);
+    });
+  });
+
+  const cleanupPowerHandlers = () => {
+    clearResumeReconnectTimer();
+    clearKeyboardRecoveryTimer();
+    systemSuspended = false;
+    resumeReconnectAttempts = 0;
+    keyboardRecoveryAttempts = 0;
+  };
+
+  app.on('before-quit', cleanupPowerHandlers);
+  app.on('will-quit', cleanupPowerHandlers);
 }
 
 function ensureTimeUpdateTimer() {
@@ -484,6 +716,29 @@ ipcMain.handle('stop-keyboard-monitoring', async () => {
   } catch (error) {
     console.error('Stop keyboard monitoring error:', error);
     throw error;
+  }
+});
+
+ipcMain.handle('restart-keyboard-monitoring', async () => {
+  if (!keyboardMonitor) {
+    throw new Error('Keyboard monitor not initialized');
+  }
+
+  try {
+    keyboardRecoveryAttempts = 0;
+    clearKeyboardRecoveryTimer();
+    await restartKeyboardMonitoring({ force: true });
+
+    const fallbackActive = !!keyboardMonitor.fallbackMode;
+    if (fallbackActive) {
+      scheduleKeyboardRecovery(KEYBOARD_RECOVERY_BASE_DELAY_MS);
+    }
+
+    return { success: !fallbackActive, fallback: fallbackActive };
+  } catch (error) {
+    console.error('Manual keyboard monitoring restart failed:', error);
+    scheduleKeyboardRecovery(KEYBOARD_RECOVERY_BASE_DELAY_MS);
+    return { success: false, error: error.message };
   }
 });
 
