@@ -12,6 +12,7 @@ const applySettings = document.getElementById('applySettings');
 const saveSettings = document.getElementById('saveSettings');
 const resetSettings = document.getElementById('resetSettings');
 const resetTypingBtn = document.getElementById('resetTypingBtn');
+const retryKeyboardBtn = document.getElementById('retryKeyboardBtn');
 
 
 // Stat display elements
@@ -82,6 +83,9 @@ function setupEventListeners() {
     showWpm.addEventListener('change', () => updateWpmCountVisibility(showCount.checked));
     if (resetTypingBtn) {
         resetTypingBtn.addEventListener('click', resetTypingCount);
+    }
+    if (retryKeyboardBtn) {
+        retryKeyboardBtn.addEventListener('click', restartKeyboardMonitorManual);
     }
     
     // Close modal when clicking outside
@@ -258,6 +262,52 @@ async function resetTypingCount() {
     } finally {
         button.textContent = originalText;
         button.disabled = false;
+    }
+}
+
+async function restartKeyboardMonitorManual() {
+    if (!window.electronAPI || !window.electronAPI.restartKeyboardMonitoring) {
+        console.error('Restart keyboard monitoring API not available');
+        return;
+    }
+
+    if (!retryKeyboardBtn) {
+        return;
+    }
+
+    const button = retryKeyboardBtn;
+    const originalText = button.textContent;
+
+    try {
+        button.textContent = 'Restarting...';
+        button.disabled = true;
+
+        const result = await window.electronAPI.restartKeyboardMonitoring();
+
+        if (result?.success) {
+            button.textContent = 'Restarted!';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+            }, 1200);
+        } else {
+            button.textContent = 'Failed';
+            const message = result?.error || (result?.fallback
+                ? 'Keyboard monitor still in fallback mode. Check macOS secure input or permissions.'
+                : 'Keyboard monitor restart failed');
+            console.error(message);
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+            }, 1500);
+        }
+    } catch (error) {
+        console.error('Manual keyboard restart failed:', error);
+        button.textContent = 'Error';
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.disabled = false;
+        }, 1500);
     }
 }
 

@@ -80,6 +80,8 @@ class KeyboardMonitor {
             // Reset session data
             this.resetSession();
 
+            this.fallbackMode = false;
+
             this.isMonitoring = true;
             console.log('✅ Keyboard monitoring started successfully');
             console.log('🧪 Test: Type something to see if WPM detection works...');

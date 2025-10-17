@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Keyboard monitoring (to be implemented)
   startKeyboardMonitoring: () => ipcRenderer.invoke('start-keyboard-monitoring'),
   stopKeyboardMonitoring: () => ipcRenderer.invoke('stop-keyboard-monitoring'),
+  restartKeyboardMonitoring: () => ipcRenderer.invoke('restart-keyboard-monitoring'),
   getTypingStats: () => ipcRenderer.invoke('get-typing-stats'),
   resetTypingStats: () => ipcRenderer.invoke('reset-typing-stats'),
 
